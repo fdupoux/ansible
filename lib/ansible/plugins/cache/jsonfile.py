@@ -29,6 +29,8 @@ from ansible import constants as C
 from ansible.errors import *
 from ansible.parsing.utils.jsonify import jsonify
 from ansible.plugins.cache.base import BaseCacheModule
+from ansible.utils.unicode import to_bytes
+
 
 class CacheModule(BaseCacheModule):
     """
@@ -46,33 +48,31 @@ class CacheModule(BaseCacheModule):
             try:
                 os.makedirs(self._cache_dir)
             except (OSError,IOError) as e:
-                self._display.warning("error while trying to create cache dir %s : %s" % (self._cache_dir, str(e)))
+                self._display.warning("error while trying to create cache dir %s : %s" % (self._cache_dir, to_bytes(e)))
                 return None
 
     def get(self, key):
 
+        if self.has_expired(key) or key == "":
+           raise KeyError
+
         if key in self._cache:
             return self._cache.get(key)
 
-        if self.has_expired(key):
-           raise KeyError
-
         cachefile = "%s/%s" % (self._cache_dir, key)
         try:
-            f = codecs.open(cachefile, 'r', encoding='utf-8')
+            with codecs.open(cachefile, 'r', encoding='utf-8') as f:
+                try:
+                    value = json.load(f)
+                    self._cache[key] = value
+                    return value
+                except ValueError as e:
+                    self._display.warning("error while trying to read %s : %s. Most likely a corrupt file, so erasing and failing." % (cachefile, to_bytes(e)))
+                    self.delete(key)
+                    raise AnsibleError("The JSON cache file %s was corrupt, or did not otherwise contain valid JSON data. It has been removed, so you can re-run your command now." % cachefile)
         except (OSError,IOError) as e:
-            self._display.warning("error while trying to read %s : %s" % (cachefile, str(e)))
-            pass
-        else:
-            try:
-                value = json.load(f)
-                self._cache[key] = value
-                return value
-            except ValueError:
-                self._display.warning("error while trying to write to %s : %s" % (cachefile, str(e)))
-                raise KeyError
-        finally:
-            f.close()
+            self._display.warning("error while trying to read %s : %s" % (cachefile, to_bytes(e)))
+            raise KeyError
 
     def set(self, key, value):
 
@@ -82,7 +82,7 @@ class CacheModule(BaseCacheModule):
         try:
             f = codecs.open(cachefile, 'w', encoding='utf-8')
         except (OSError,IOError) as e:
-            self._display.warning("error while trying to write to %s : %s" % (cachefile, str(e)))
+            self._display.warning("error while trying to write to %s : %s" % (cachefile, to_bytes(e)))
             pass
         else:
             f.write(jsonify(value))
@@ -98,7 +98,7 @@ class CacheModule(BaseCacheModule):
             if e.errno == errno.ENOENT:
                 return False
             else:
-                self._display.warning("error while trying to stat %s : %s" % (cachefile, str(e)))
+                self._display.warning("error while trying to stat %s : %s" % (cachefile, to_bytes(e)))
                 pass
 
         if time.time() - st.st_mtime <= self._timeout:
@@ -130,11 +130,14 @@ class CacheModule(BaseCacheModule):
             if e.errno == errno.ENOENT:
                 return False
             else:
-                self._display.warning("error while trying to stat %s : %s" % (cachefile, str(e)))
+                self._display.warning("error while trying to stat %s : %s" % (cachefile, to_bytes(e)))
                 pass
 
     def delete(self, key):
-        del self._cache[key]
+        try:
+            del self._cache[key]
+        except KeyError:
+            pass
         try:
             os.remove("%s/%s" % (self._cache_dir, key))
         except (OSError,IOError) as e:

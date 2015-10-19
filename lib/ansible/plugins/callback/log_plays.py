@@ -19,6 +19,7 @@ import os
 import time
 import json
 
+from ansible.utils.unicode import to_bytes
 from ansible.plugins.callback import CallbackBase
 
 # NOTE: in Ansible 1.2 or later general logging is available without
@@ -53,16 +54,14 @@ class CallbackModule(CallbackBase):
                 data = 'omitted'
             else:
                 data = data.copy()
-                invocation = data.pop('invocation', None)
                 data = json.dumps(data)
-                if invocation is not None:
-                    data = json.dumps(invocation) + " => %s " % data
 
         path = os.path.join("/var/log/ansible/hosts", host)
         now = time.strftime(self.TIME_FORMAT, time.localtime())
-        fd = open(path, "a")
-        fd.write(self.MSG_FORMAT % dict(now=now, category=category, data=data))
-        fd.close()
+
+        msg = to_bytes(self.MSG_FORMAT % dict(now=now, category=category, data=data))
+        with open(path, "ab") as fd:
+            fd.write(msg)
 
     def runner_on_failed(self, host, res, ignore_errors=False):
         self.log(host, 'FAILED', res)
